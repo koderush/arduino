@@ -1,105 +1,107 @@
-/**
- * Geiger Counter Pin VIN <-> Pin 2 (Arduino)
- */
+/* 
+ Modified by KR
+*/
+
 #include <SPI.h>
 #include <Wire.h>
-#include <LiquidCrystal.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH1106.h>
 
-LiquidCrystal lcd(8, 7, 6, 5, 4, 3);
+volatile unsigned long counts = 0;  // Tube events
+unsigned long cpm = 0;              // CPM
+unsigned long previousMillis;       // Time measurement
+const int inputPin = 3;             // geiger is on this pin?
+unsigned int thirds = 0;
+unsigned long minutes = 0;
+unsigned long hours = 0;
+unsigned long days = 0;
+unsigned long start = 0;
 
-volatile unsigned long hits = 0; // Tube events
+#define LOG_PERIOD 1000  //Logging period in milliseconds
+#define MINUTE_PERIOD 60000
+#define HOUR_PERIOD 3600000
+#define DAY_PERIOD 86400000
 
-unsigned long DAY = 8640000; // 1 Day
-unsigned long HOUR = 360000; // 1 Hour
-unsigned long MINUTE = 60000; // 1 Minute
-unsigned long TICK_HEIGHT = 1000; // 1 Minute
+#define OLED_RESET 4
+Adafruit_SH1106 display(OLED_RESET);
 
 
-unsigned long sampleRate = 1000;
-unsigned long sampleHits = 0; // Hits in one sample
-unsigned long previousTime;
-unsigned long previousHits; // Time measurement
-
-const int inputPin = 2; // Has to use PIN 2 because it supports interrupts
-
-void ISR_impulse() { // Captures count of events from Geiger counter board
-  hits++;
-
-  // Serial.println(hits);
+void ISR_impulse() {  // Captures count of events from Geiger counter board
+  counts++;
+  Serial.println(counts);
+  // ledPrintln(0, 0, String(counts));
 }
 
-void setup()   {
+void setup() {
+  // put your setup code here, to run once:
   Serial.begin(9600);
-  // set up the LCD's number of columns and rows:
-  lcd.begin(16, 2);
+  delay(1000);
 
-  previousTime = millis();
-  
-  pinMode(inputPin, INPUT);                                                // Set pin for capturing Tube events
-  interrupts();                                                            // Enable interrupts
-  attachInterrupt(digitalPinToInterrupt(inputPin), ISR_impulse, FALLING); // Define interrupt on falling edge
+  // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
+  display.begin(SH1106_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
+  // init done
+
+  // Show image buffer on the display hardware.
+  // Since the buffer is intialized with an Adafruit splashscreen
+  // internally, this will display the splashscreen.
+  display.display();
+  delay(2000);
+  display.clearDisplay();
+
+  Serial.println("booting...");
+  Serial.println("measuring");
+  pinMode(inputPin, INPUT);  // Set pin for capturing Tube events
+  interrupts();
+  attachInterrupt(digitalPinToInterrupt(inputPin), ISR_impulse, FALLING);  // Define interrupt on falling edge
+  unsigned long clock1 = millis();
+  start = clock1;
 }
-
 
 void loop() {
-  unsigned long currentTime = millis();
-  if(currentTime < previousTime)
-  {
-    // means millis() overflowed after 50 days
-    previousTime = currentTime;
+  // put your main code here, to run repeatedly:
+  unsigned long currentMillis = millis();
 
-    return;
+  // Serial.println("looping...");
+
+  if (currentMillis - previousMillis > LOG_PERIOD) {
+
+    previousMillis = currentMillis;
+    // Serial.print("previousMillis: ");
+    // Serial.println(String(previousMillis));
+    minutes = (previousMillis - start) / MINUTE_PERIOD;
+    hours = (previousMillis - start) / HOUR_PERIOD;
+    days = (previousMillis - start) / DAY_PERIOD;
+
+    // Serial.print("minutes: ");
+    // Serial.println(String(minutes));
+
+    //cpm = counts * MINUTE_PERIOD / LOG_PERIOD; this is just counts times 3 so:
+
+    cpm = counts / minutes;
+    // Serial.print("Total clicks since start: ");
+    // Serial.println(String(counts));
+    display.clearDisplay();
+    {
+      ledPrint(0, 0, "Counts: " + String(counts));
+      ledPrint(0, 16, "Minutes: " + String(minutes));
+      ledPrint(0, 32, "Days: " + String(days));
+      ledPrint(0, 48, "Avg: " + String(counts / (minutes + 0.01)) + " / min");
+    }
+    display.display();
+    // Serial.print("Rolling CPM: ");
+    // Serial.println(String(cpm));
+
+    //    if ( thirds > 2) {
+    //      counts = 0;
+    //      thirds = 0;
+    //    }
   }
-  
-  if(currentTime > (previousTime + sampleRate))
-  {
-      sampleHits = hits - previousHits;    
+}
 
-//    Serial.println("----");
-//    Serial.print(currentTime);
-//    Serial.println(previousTime);
-//    Serial.print(0); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(1000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(2000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(3000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(4000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(5000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(6000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(7000); // print a baseline for scaling
-//    Serial.print(",");
-//    Serial.print(8000); // print a baseline for scaling
-//    Serial.print(sampleRate);
-//    Serial.print(",");
-      Serial.print(sampleHits);
-      Serial.print(",");
-      Serial.print(currentTime%MINUTE==0?TICK_HEIGHT:0);
-      Serial.print(",");
-      Serial.print(currentTime%HOUR==0?TICK_HEIGHT:0);
-      Serial.print(",");
-      Serial.print(currentTime);
-     
-      Serial.println("");
+void ledPrint(uint8_t startX, uint8_t startY, String s) {
 
-    previousHits = hits;
-    previousTime = currentTime;
-  }
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("LEVEL: ");
-  lcd.print(sampleHits);
-  // lcd.print("/m");
-  lcd.setCursor(0, 1);
-  lcd.print("HIT: ");
-  lcd.print(hits);
-  lcd.display();
-  
-  delay(1000);
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(startX, startY);
+  display.print(s);
 }
